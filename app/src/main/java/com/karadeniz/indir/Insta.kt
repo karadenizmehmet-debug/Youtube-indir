@@ -64,7 +64,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
+import kotlinx.coroutines.delay
 import java.math.BigInteger
 import java.net.HttpURLConnection
 import java.net.URL
@@ -120,21 +123,86 @@ object Ig {
         }
     }
 
-    /** Görünmez bir WebView içinde, Instagram oturumuyla API'yi çağırır. */
+    fun parseList(json: String): List<IgItem> {
+        val arr = JSONArray(json)
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            IgItem(it + 1, o.getString("thumb"), o.getString("full"), o.optBoolean("video"))
+        }
+    }
+
+    /** Sayfadaki script bloklarından gönderinin medyasını bulan JS (giriş gerekmez) */
+    private fun extractJs(code: String, mediaId: String) = """
+        (function(code, pk){
+          function norm(item){
+            var nodes = item.carousel_media || [item];
+            return nodes.map(function(n){
+              var c = (n.image_versions2||{}).candidates||[]; if(!c.length) return null;
+              var big=c[0].url, th=big;
+              for(var k=0;k<c.length;k++){ if(c[k].width>=300&&c[k].width<=700){th=c[k].url;break;} }
+              var v = n.media_type==2 && n.video_versions && n.video_versions.length;
+              return {thumb:th, full: v? n.video_versions[0].url : big, video: !!v};
+            }).filter(Boolean);
+          }
+          function normGql(m){
+            var nodes = m.edge_sidecar_to_children ? m.edge_sidecar_to_children.edges.map(function(e){return e.node;}) : [m];
+            return nodes.map(function(n){
+              var r=n.display_resources||[], th=n.display_url;
+              for(var k=0;k<r.length;k++){ if(r[k].config_width>=300&&r[k].config_width<=700){th=r[k].src;break;} }
+              return {thumb:th, full: (n.is_video&&n.video_url)? n.video_url : n.display_url, video: !!n.is_video};
+            }).filter(function(x){return x.full;});
+          }
+          var found=null, seen=0;
+          function isMe(o){ return o.code===code || o.shortcode===code || String(o.pk)===pk || (typeof o.id==='string' && o.id.indexOf(pk)===0); }
+          function walk(o,d){
+            if(found||!o||typeof o!=='object'||d>60||++seen>300000) return;
+            if(Array.isArray(o)){ for(var i=0;i<o.length;i++) walk(o[i],d+1); return; }
+            if(isMe(o)){
+              if(o.image_versions2 || o.carousel_media){ var a=norm(o); if(a.length){found=a;return;} }
+              if(o.display_url){ var b=normGql(o); if(b.length){found=b;return;} }
+            }
+            for(var k in o) walk(o[k],d+1);
+          }
+          var ss=document.querySelectorAll('script');
+          for(var i=0;i<ss.length&&!found;i++){
+            var t=ss[i].textContent; if(!t||t.indexOf(code)<0&&t.indexOf(pk)<0) continue;
+            var tt=t.trim();
+            if(tt[0]==='{'||tt[0]==='['){ try{ walk(JSON.parse(tt),0); }catch(e){} }
+            if(!found){
+              var m=t.match(/"contextJSON":"((?:\\.|[^"\\])*)"/);
+              if(m){ try{ walk(JSON.parse(JSON.parse('"'+m[1]+'"')),0); }catch(e){} }
+            }
+          }
+          // Son çare: yalnız tek görselli gönderiler için sayfadaki büyük resim
+          if(!found){
+            var og=document.querySelector('meta[property="og:image"]');
+            if(og && og.content && location.href.indexOf('/embed')>0){
+              var img=document.querySelector('img.EmbeddedMediaImage');
+              var u=(img&&img.src)||og.content; found=[{thumb:u, full:u, video:false}];
+            }
+          }
+          return found ? JSON.stringify(found) : '';
+        })('$code', '$mediaId');
+    """.trimIndent()
+
+    /** Görünmez bir WebView içinde gönderiyi açar ve medyayı okur. */
     @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     class Client(context: Context) {
         val web = WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // Masaüstü görünümü: Instagram girişsiz gönderiyi bu görünümde açıyor
+            settings.userAgentString =
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    loaded = true
+                    currentUrl = url
                     pendingLoad?.invoke(); pendingLoad = null
                 }
             }
             addJavascriptInterface(Bridge(), "IgBridge")
         }
-        private var loaded = false
+        private var currentUrl: String? = null
         private var pendingLoad: (() -> Unit)? = null
         private var pendingResult: ((Int, String) -> Unit)? = null
         private val main = Handler(Looper.getMainLooper())
@@ -146,40 +214,71 @@ object Ig {
             }
         }
 
-        private suspend fun ensureLoaded() {
-            if (loaded) return
+        private suspend fun load(url: String) {
             withTimeout(30_000) {
                 suspendCancellableCoroutine { cont ->
                     main.post {
                         pendingLoad = { if (cont.isActive) cont.resume(Unit) }
-                        web.loadUrl("https://www.instagram.com/")
+                        web.loadUrl(url)
                     }
                 }
             }
         }
 
-        suspend fun mediaInfo(mediaId: String): Pair<Int, String> {
-            ensureLoaded()
-            return withTimeout(30_000) {
-                suspendCancellableCoroutine { cont ->
-                    main.post {
-                        pendingResult = { s, b -> if (cont.isActive) cont.resume(s to b) }
-                        web.evaluateJavascript(
-                            """
-                            (function(){
-                              fetch('/api/v1/media/$mediaId/info/', {credentials:'include', headers:{
-                                'X-IG-App-ID':'$APP_ID','X-ASBD-ID':'359341','X-Requested-With':'XMLHttpRequest'}})
-                              .then(function(r){ return r.text().then(function(t){ IgBridge.done(r.status, t); }); })
-                              .catch(function(e){ IgBridge.done(-1, String(e)); });
-                            })();
-                            """.trimIndent(), null
-                        )
-                    }
+        private suspend fun eval(js: String): String = suspendCancellableCoroutine { cont ->
+            main.post {
+                web.evaluateJavascript(js) { v ->
+                    val s = runCatching { JSONTokener(v).nextValue() as? String }.getOrNull() ?: ""
+                    if (cont.isActive) cont.resume(s)
                 }
             }
         }
 
-        fun reset() { loaded = false }
+        /** Sayfayı açar, veri gelene kadar birkaç kez dener. */
+        private suspend fun scrape(url: String, code: String, pk: String): List<IgItem> {
+            load(url)
+            repeat(10) {
+                val r = eval(extractJs(code, pk))
+                if (r.isNotEmpty()) return parseList(r)
+                delay(800)
+            }
+            return emptyList()
+        }
+
+        /** Girişliyse resmi API; değilse gönderi sayfası, sonra gömülü (embed) sayfa. */
+        suspend fun fetchPost(code: String): List<IgItem> {
+            val pk = mediaId(code)
+            if (isLoggedIn()) {
+                runCatching {
+                    load("https://www.instagram.com/")
+                    val (st, body) = apiInfo(pk)
+                    if (st == 200) return parse(body)
+                }
+            }
+            scrape("https://www.instagram.com/p/$code/", code, pk).let { if (it.isNotEmpty()) return it }
+            scrape("https://www.instagram.com/p/$code/embed/captioned/", code, pk).let { if (it.isNotEmpty()) return it }
+            return emptyList()
+        }
+
+        private suspend fun apiInfo(mediaId: String): Pair<Int, String> = withTimeout(30_000) {
+            suspendCancellableCoroutine { cont ->
+                main.post {
+                    pendingResult = { s, b -> if (cont.isActive) cont.resume(s to b) }
+                    web.evaluateJavascript(
+                        """
+                        (function(){
+                          fetch('/api/v1/media/$mediaId/info/', {credentials:'include', headers:{
+                            'X-IG-App-ID':'$APP_ID','X-ASBD-ID':'359341','X-Requested-With':'XMLHttpRequest'}})
+                          .then(function(r){ return r.text().then(function(t){ IgBridge.done(r.status, t); }); })
+                          .catch(function(e){ IgBridge.done(-1, String(e)); });
+                        })();
+                        """.trimIndent(), null
+                    )
+                }
+            }
+        }
+
+        fun reset() { currentUrl = null }
     }
 }
 
@@ -233,26 +332,23 @@ class InstaVm(app: Application) : AndroidViewModel(app) {
         if (busy) return
         val c = Ig.shortcode(url)
         if (c == null) { setStatus("Instagram gönderi linki değil (instagram.com/p/…)", true); return }
-        if (!loggedIn) { setStatus("Önce Instagram'a giriş yap.", true); return }
         busy = true; progress = -1f
         items.clear(); selected.clear(); lastZip = null
         setStatus("Gönderi getiriliyor…", false)
         viewModelScope.launch {
             try {
-                val (st, body) = client.mediaInfo(Ig.mediaId(c))
-                when {
-                    st == 401 || st == 403 || body.contains("login_required") -> {
-                        loggedIn = false
-                        setStatus("Instagram oturumu düşmüş. Tekrar giriş yap.", true)
-                    }
-                    st != 200 -> setStatus("Instagram yanıtı: $st. Gizli hesap veya silinmiş gönderi olabilir.", true)
-                    else -> {
-                        val list = withContext(Dispatchers.Default) { Ig.parse(body) }
-                        code = c
-                        items.addAll(list)
-                        selected.addAll(list.filter { !it.isVideo }.map { it.index })
-                        setStatus("${list.size} öğe bulundu. İndireceklerini seç.", false)
-                    }
+                val list = client.fetchPost(c)
+                if (list.isEmpty()) {
+                    setStatus(
+                        if (loggedIn) "Gönderi okunamadı. Gizli hesap veya silinmiş gönderi olabilir."
+                        else "Bu gönderi girişsiz açılmadı (gizli hesap olabilir). İstersen aşağıdan giriş yapıp tekrar dene.",
+                        true
+                    )
+                } else {
+                    code = c
+                    items.addAll(list)
+                    selected.addAll(list.filter { !it.isVideo }.map { it.index })
+                    setStatus("${list.size} öğe bulundu. İndireceklerini seç.", false)
                 }
             } catch (e: Throwable) {
                 setStatus("Getirilemedi: ${e.message ?: e}", true)
@@ -336,23 +432,6 @@ fun InstaTab(
     AndroidView(factory = { (client.web.parent as? android.view.ViewGroup)?.removeView(client.web); client.web },
         modifier = Modifier.size(1.dp).alpha(0f))
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            if (vm.loggedIn) "● Instagram'a girişli" else "○ Instagram girişi yok",
-            color = if (vm.loggedIn) Color(0xFF43A047) else fg.copy(alpha = 0.6f), fontSize = 13.sp
-        )
-        Spacer(Modifier.weight(1f))
-        if (vm.loggedIn) TextButton(onClick = { vm.logout(client) }) { Text("Çıkış") }
-        else TextButton(onClick = onShowLogin) { Text("Giriş yap") }
-    }
-    if (!vm.loggedIn) {
-        Text(
-            "Görselleri almak için Instagram hesabınla bir kez giriş yapman gerekir. " +
-                "Şifren Instagram'ın kendi sayfasına girilir, uygulama görmez ve saklamaz.",
-            fontSize = 12.sp, color = fg.copy(alpha = 0.6f)
-        )
-    }
-
     OutlinedTextField(
         value = vm.url,
         onValueChange = { vm.url = it },
@@ -370,7 +449,7 @@ fun InstaTab(
     )
     Button(
         onClick = { vm.fetch(client) },
-        enabled = !vm.busy && vm.url.isNotBlank() && vm.loggedIn,
+        enabled = !vm.busy && vm.url.isNotBlank(),
         modifier = Modifier.fillMaxWidth().height(48.dp),
         colors = ButtonDefaults.buttonColors(containerColor = accent)
     ) { Text("Görselleri getir", color = Color.White) }
@@ -410,6 +489,16 @@ fun InstaTab(
             Spacer(Modifier.size(8.dp))
             OutlinedButton(onClick = { onShare(z) }) { Text("Paylaş") }
         }
+    }
+    Spacer(Modifier.height(4.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (vm.loggedIn) "● Instagram'a girişli" else "Giriş gerekmez. Gizli hesaplar için isteğe bağlı giriş:",
+            color = if (vm.loggedIn) Color(0xFF43A047) else fg.copy(alpha = 0.6f), fontSize = 12.sp,
+            modifier = Modifier.weight(1f)
+        )
+        if (vm.loggedIn) TextButton(onClick = { vm.logout(client) }) { Text("Çıkış") }
+        else TextButton(onClick = onShowLogin) { Text("Giriş yap") }
     }
 }
 

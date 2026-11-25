@@ -6,7 +6,7 @@ YouTube, Instagram ve yt-dlp'nin desteklediği diğer sitelerden video/ses indir
 - Video (MP4, kalite seçimi) veya ses (MP3).
 - Dosyalar `Filmler/İndir` ve `Müzik/İndir` klasörüne kaydedilir.
 - yt-dlp motoru günde bir kez kendiliğinden güncellenir.
-- **Instagram görselleri:** gönderideki fotoğrafları seç, seçtiklerini tek ZIP olarak `İndirilenler/İndir` klasörüne indir. Uygulama içinden bir kez Instagram girişi ister.
+- **Instagram görselleri:** gönderideki fotoğrafları seç, seçtiklerini tek ZIP olarak `İndirilenler/İndir` klasörüne indir. Giriş gerekmez; gizli hesaplar için isteğe bağlı giriş var.
 
 APK: [Releases](https://github.com/karadenizmehmet-debug/youtube-indir/releases/latest) (`main`'e her push'ta GitHub Actions derler).
 

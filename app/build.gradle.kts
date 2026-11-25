@@ -12,8 +12,8 @@ android {
         applicationId = "com.karadeniz.indir"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         // S25 ve güncel telefonlar arm64; diğer mimarileri almamak APK'yı küçültür
         ndk { abiFilters += listOf("arm64-v8a") }
     }
