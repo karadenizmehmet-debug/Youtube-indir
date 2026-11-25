@@ -37,6 +37,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,11 +57,20 @@ import androidx.compose.ui.unit.sp
 // Mehmet Karadeniz, 2026-2027
 class MainActivity : ComponentActivity() {
     private val vm: MainVm by viewModels()
+    private val ivm: InstaVm by viewModels()
+    private val igClient by lazy { Ig.Client(this) }
+    private val tab = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleShare(intent)
-        setContent { Screen(vm, ::shareApp, ::openFile, ::shareFile) }
+        setContent {
+            var showLogin by remember { mutableStateOf(false) }
+            Screen(vm, tab.intValue, { tab.intValue = it }, ::shareApp, ::openFile, ::shareFile) {
+                InstaTab(ivm, igClient, Accent, { showLogin = true }, ::openFile, ::shareFile)
+                if (showLogin) LoginDialog { showLogin = false; ivm.refreshLogin(igClient) }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -65,7 +81,13 @@ class MainActivity : ComponentActivity() {
     private fun handleShare(i: Intent?) {
         if (i?.action != Intent.ACTION_SEND) return
         val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        MainVm.extractUrl(text)?.let { vm.url = it }
+        val link = MainVm.extractUrl(text) ?: return
+        // Instagram fotoğraf gönderisi (/p/) görsel sekmesine, diğerleri video sekmesine
+        if (link.contains("instagram.com") && Regex("/p/").containsMatchIn(link)) {
+            ivm.url = link; tab.intValue = 1
+        } else {
+            vm.url = link; tab.intValue = 0
+        }
     }
 
     private fun shareApp() {
@@ -98,14 +120,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val Accent = Color(0xFFE53935)
+val Accent = Color(0xFFE53935)
 
 @Composable
 private fun Screen(
     vm: MainVm,
+    tab: Int,
+    onTab: (Int) -> Unit,
     onShareApp: () -> Unit,
     onOpen: (Done) -> Unit,
     onShareFile: (Done) -> Unit,
+    instaTab: @Composable () -> Unit,
 ) {
     val scheme = if (vm.dark) {
         darkColorScheme(primary = Accent, background = Color(0xFF111418), surface = Color(0xFF1A1E24))
@@ -125,6 +150,10 @@ private fun Screen(
                 .imePadding()
         ) {
             Header(vm, onShareApp)
+            TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.surface, contentColor = Accent) {
+                Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("🎬 Video / Ses") })
+                Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("🖼 Instagram görselleri") })
+            }
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -132,12 +161,16 @@ private fun Screen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                LinkBox(vm)
-                ModePicker(vm)
-                ActionArea(vm)
-                if (vm.done.isNotEmpty()) {
-                    Text("İndirilenler", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    vm.done.forEach { DoneCard(it, onOpen, onShareFile) }
+                if (tab == 0) {
+                    LinkBox(vm)
+                    ModePicker(vm)
+                    ActionArea(vm)
+                    if (vm.done.isNotEmpty()) {
+                        Text("İndirilenler", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                        vm.done.forEach { DoneCard(it, onOpen, onShareFile) }
+                    }
+                } else {
+                    instaTab()
                 }
                 Footer(vm)
             }
@@ -256,7 +289,7 @@ private fun Footer(vm: MainVm) {
             Text(if (vm.updating) "Güncelleniyor…" else "Motoru güncelle", fontSize = 12.sp)
         }
     }
-    Text("Dosyalar: Filmler/İndir ve Müzik/İndir klasörü", fontSize = 12.sp, color = dim)
+    Text("Dosyalar: Filmler/İndir, Müzik/İndir, İndirilenler/İndir", fontSize = 12.sp, color = dim)
     Text("Yalnızca indirme hakkın olan içerikler için kullan.", fontSize = 12.sp, color = dim)
     Text("© Mehmet Karadeniz, 2026-2027", fontSize = 12.sp, color = dim)
 }
