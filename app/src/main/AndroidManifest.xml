@@ -20,6 +20,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Karadeniz Ekosistemi hub'ından açılış: kindir://ac (Chrome yalnızca BROWSABLE ekranları açar) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="kindir" />
+            </intent-filter>
             <!-- YouTube/Instagram içinden "Paylaş > İndir" -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
