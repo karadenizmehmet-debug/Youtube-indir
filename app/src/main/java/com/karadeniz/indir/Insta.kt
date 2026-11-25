@@ -110,7 +110,8 @@ object Ig {
             ?: listOf(item)
         return nodes.mapIndexed { i, n ->
             val cands = n.getJSONObject("image_versions2").getJSONArray("candidates")
-            val big = cands.getJSONObject(0).getString("url")
+            val big = (0 until cands.length()).map { cands.getJSONObject(it) }
+                .maxByOrNull { it.optInt("width") }!!.getString("url")
             // küçük önizleme: genişliği 320-640 arası olan ilk aday, yoksa en büyüğü
             var thumb = big
             for (k in 0 until cands.length()) {
@@ -138,7 +139,7 @@ object Ig {
             var nodes = item.carousel_media || [item];
             return nodes.map(function(n){
               var c = (n.image_versions2||{}).candidates||[]; if(!c.length) return null;
-              var big=c[0].url, th=big;
+              var bi=0; for(var q=0;q<c.length;q++){ if((c[q].width||0)>(c[bi].width||0)) bi=q; } var big=c[bi].url, th=big;
               for(var k=0;k<c.length;k++){ if(c[k].width>=300&&c[k].width<=700){th=c[k].url;break;} }
               var v = n.media_type==2 && n.video_versions && n.video_versions.length;
               return {thumb:th, full: v? n.video_versions[0].url : big, video: !!v};
@@ -147,9 +148,9 @@ object Ig {
           function normGql(m){
             var nodes = m.edge_sidecar_to_children ? m.edge_sidecar_to_children.edges.map(function(e){return e.node;}) : [m];
             return nodes.map(function(n){
-              var r=n.display_resources||[], th=n.display_url;
+              var r=n.display_resources||[], th=n.display_url, best=n.display_url, bw=0; for(var q=0;q<r.length;q++){ if(r[q].config_width>bw){bw=r[q].config_width;best=r[q].src;} }
               for(var k=0;k<r.length;k++){ if(r[k].config_width>=300&&r[k].config_width<=700){th=r[k].src;break;} }
-              return {thumb:th, full: (n.is_video&&n.video_url)? n.video_url : n.display_url, video: !!n.is_video};
+              return {thumb:th, full: (n.is_video&&n.video_url)? n.video_url : best, video: !!n.is_video};
             }).filter(function(x){return x.full;});
           }
           var found=null, seen=0;
@@ -299,6 +300,8 @@ class InstaVm(app: Application) : AndroidViewModel(app) {
     var code by mutableStateOf("")
         private set
 
+    var zipName by mutableStateOf("")
+
     val items = mutableStateListOf<IgItem>()
     val selected = mutableStateListOf<Int>()
     var lastZip by mutableStateOf<Done?>(null)
@@ -346,6 +349,7 @@ class InstaVm(app: Application) : AndroidViewModel(app) {
                     )
                 } else {
                     code = c
+                    zipName = "instagram_$c"
                     items.addAll(list)
                     selected.addAll(list.filter { !it.isVideo }.map { it.index })
                     setStatus("${list.size} öğe bulundu. İndireceklerini seç.", false)
@@ -377,7 +381,7 @@ class InstaVm(app: Application) : AndroidViewModel(app) {
     }
 
     private fun writeZip(chosen: List<IgItem>): Done {
-        val name = "instagram_$code"
+        val name = safeName(zipName).ifEmpty { "instagram_$code" }
         val resolver = ctx.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.zip")
@@ -414,6 +418,9 @@ class InstaVm(app: Application) : AndroidViewModel(app) {
     }
 
     private fun setStatus(s: String, err: Boolean) { status = s; error = err }
+
+    /** Dosya adında sorun çıkaran karakterleri atar; Türkçe harfler kalır */
+    private fun safeName(n: String) = n.trim().removeSuffix(".zip").replace(Regex("""[\\/:*?"<>|\n\r\t]"""), "_").take(80).trim()
 }
 
 @Composable
@@ -476,9 +483,18 @@ fun InstaTab(
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
+        OutlinedTextField(
+            value = vm.zipName,
+            onValueChange = { vm.zipName = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("ZIP dosyasının adı") },
+            suffix = { Text(".zip") },
+            singleLine = true,
+            enabled = !vm.busy
+        )
         Button(
             onClick = vm::downloadZip,
-            enabled = !vm.busy && vm.selected.isNotEmpty(),
+            enabled = !vm.busy && vm.selected.isNotEmpty() && vm.zipName.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = accent)
         ) { Text("Seçilenleri ZIP indir (${vm.selected.size})", color = Color.White, fontSize = 16.sp) }
