@@ -7,7 +7,7 @@ YouTube, Instagram ve yt-dlp'nin desteklediği diğer sitelerden video/ses indir
 - Dosyalar `Filmler/İndir` ve `Müzik/İndir` klasörüne kaydedilir.
 - yt-dlp motoru günde bir kez kendiliğinden güncellenir.
 
-APK: [Releases](https://github.com/karadenizmehmet-debug/Indir/releases/latest) (`main`'e her push'ta GitHub Actions derler).
+APK: [Releases](https://github.com/karadenizmehmet-debug/youtube-indir/releases/latest) (`main`'e her push'ta GitHub Actions derler).
 
 Yalnızca indirme hakkınız olan içerikler için kullanın.
 

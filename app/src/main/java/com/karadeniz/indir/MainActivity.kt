@@ -74,7 +74,7 @@ class MainActivity : ComponentActivity() {
             putExtra(
                 Intent.EXTRA_TEXT,
                 "İndir — YouTube, Instagram ve daha fazlasından video indir:\n" +
-                    "https://github.com/karadenizmehmet-debug/Indir/releases/latest"
+                    "https://github.com/karadenizmehmet-debug/youtube-indir/releases/latest"
             )
         }
         startActivity(Intent.createChooser(send, "Uygulamayı paylaş"))
