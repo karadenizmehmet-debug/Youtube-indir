@@ -1,0 +1,49 @@
+name: APK derle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Derle
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Derleme hatalarını göster
+        if: failure()
+        run: |
+          grep -E "^e: |error:|What went wrong" -A3 build.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done
+
+      - name: APK'yı hazırla
+        run: cp app/build/outputs/apk/release/app-release.apk indir.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: indir
+          path: indir.apk
+
+      - name: Sürüm yayınla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: İndir build ${{ github.run_number }}
+          files: indir.apk
+          make_latest: true
